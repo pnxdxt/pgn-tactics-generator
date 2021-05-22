@@ -1,5 +1,16 @@
 # pgn-tactics-generator
 
+## My fork
+TODO:
+I want the generator to be able:\
+-> Connect to a mongo database.\
+-> Take a user as argument.\
+-> Retrieve games from this user in the mongodb.\
+-> Check if this game has been analysed or not.\
+-> It it has been analyzed, skip.\
+-> If not, process and try to generate puzzles from it.\
+-> Store the puzzle as json object in mongodb.
+
 ## About
 
 This is a python application dedicated to creating chess puzzles/tactics from a pgn file.

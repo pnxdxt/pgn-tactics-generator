@@ -9,6 +9,8 @@ import sys
 import chess.pgn
 import chess.uci
 
+import pymongo
+
 from modules.api.api import post_puzzle
 from modules.bcolors.bcolors import bcolors
 from modules.fishnet.fishnet import stockfish_command
