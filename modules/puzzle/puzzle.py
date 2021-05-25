@@ -22,6 +22,14 @@ class puzzle:
             'move_list': self.positions.move_list()
         }
 
+    def to_json(self, user: str, puzzle_pgn: str):
+        return {
+            'game_id': self.game_id,
+            'user': user,
+            'category': self.positions.category(),
+            'pgn': puzzle_pgn,
+        }
+
     def color(self):
         return self.positions.position.turn
 
