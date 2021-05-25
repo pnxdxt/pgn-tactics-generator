@@ -76,6 +76,29 @@ engine.uci()
 info_handler = chess.uci.InfoHandler()
 engine.info_handlers.append(info_handler)
 
+def updateGame(gameID: str) -> bool:
+   client = pymongo.MongoClient('url')
+   try:
+      database = client["woodpecker-db"]
+      collection = database["games"]
+      setAsAnalyzed = { "$set" : { "analyzed": True }}
+      collection.update_one({"game_id": gameID}, setAsAnalyzed)
+      return True
+   except Exception as err:
+      print(err)
+      return False
+
+def insertPuzzle(puzzle) -> bool:
+   client = pymongo.MongoClient('url')
+   try:
+      database = client["woodpecker-db"]
+      collection = database["puzzles"]
+      collection.insert_one(puzzle)
+      return True
+   except Exception as err:
+      print(err)
+      return False
+
 all_games = open(settings.games, "r")
 tactics_file = open("tactics.pgn", "w")
 game_id = 0
