@@ -3,6 +3,7 @@
 """Creating chess puzzles for lichess.org"""
 
 import argparse
+import io
 import logging
 import sys
 
@@ -32,6 +33,10 @@ def str2bool(v):
 def prepare_settings():
     parser = argparse.ArgumentParser(description=__doc__)
 
+    parser.add_argument("--max", metavar="MAX", nargs="?", type=int, default=20,
+                        help="number of games to retrieve")
+    parser.add_argument("--user", metavar="USER", nargs="?", type=str,
+                        help="user to retrieve games")
     parser.add_argument("--threads", metavar="THREADS", nargs="?", type=int, default=4,
                         help="number of engine threads")
     parser.add_argument("--memory", metavar="MEMORY", nargs="?", type=int, default=2048,
@@ -99,50 +104,55 @@ def insertPuzzle(puzzle) -> bool:
       print(err)
       return False
 
-all_games = open(settings.games, "r")
-tactics_file = open("tactics.pgn", "w")
-game_id = 0
-while True:
-    game = chess.pgn.read_game(all_games)
-    if game is None:
-        break
-    node = game
+client = pymongo.MongoClient('url')
+try:
+    database = client["woodpecker-db"]
+    collection = database["games"]
+    print(settings.user)
+    for currentGame in collection.find({"user": settings.user}).limit(settings.max):
+        if currentGame["analyzed"] == True:
+            print(currentGame["game_id"])
+            print("Already analyzed")
+        else:
+            print(currentGame["game_id"])
+            print("Not analyzed yet")
+            pgn = io.StringIO(currentGame["pgn"])
+            game = chess.pgn.read_game(pgn)
+            if game is None:
+                break
+            node = game
 
-    game_id = game_id + 1
-    logging.debug(bcolors.WARNING + "Game ID: " + str(game_id) + bcolors.ENDC)
-    logging.debug(bcolors.WARNING + "Game headers: " + str(game) + bcolors.ENDC)
+            game_id = currentGame["game_id"]
+            logging.debug(bcolors.WARNING + "Game ID: " + str(game_id) + bcolors.ENDC)
+            logging.debug(bcolors.WARNING + "Game headers: " + str(game) + bcolors.ENDC)
 
-    prev_score = chess.uci.Score(None, None)
-    puzzles = []
+            prev_score = chess.uci.Score(None, None)
 
-    logging.debug(bcolors.OKGREEN + "Game Length: " + str(game.end().board().fullmove_number))
-    logging.debug("Analysing Game..." + bcolors.ENDC)
+            logging.debug(bcolors.OKGREEN + "Game Length: " + str(game.end().board().fullmove_number))
+            logging.debug("Analysing Game..." + bcolors.ENDC)
 
-    engine.ucinewgame()
+            engine.ucinewgame()
 
-    while not node.is_end():
-        next_node = node.variation(0)
-        engine.position(next_node.board())
+            while not node.is_end():
+                next_node = node.variation(0)
+                engine.position(next_node.board())
 
-        engine.go(depth=settings.depth)
-        cur_score = info_handler.info["score"][1]
-        logging.debug(bcolors.OKGREEN + node.board().san(next_node.move) + bcolors.ENDC)
-        logging.debug(bcolors.OKBLUE + "   CP: " + str(cur_score.cp))
-        logging.debug("   Mate: " + str(cur_score.mate) + bcolors.ENDC)
-        if investigate(prev_score, cur_score, node.board()):
-            logging.debug(bcolors.WARNING + "   Investigate!" + bcolors.ENDC)
-            puzzles.append(
-                puzzle(node.board(), next_node.move, str(game_id), engine, info_handler, game, settings.strict))
-
-        prev_score = cur_score
-        node = next_node
-
-    for i in puzzles:
-        logging.debug(bcolors.WARNING + "Generating new puzzle..." + bcolors.ENDC)
-        i.generate(settings.depth)
-        if i.is_complete():
-            puzzle_pgn = post_puzzle(i, settings.include_blunder)
-            tactics_file.write(puzzle_pgn)
-            tactics_file.write("\n\n")
-
-tactics_file.close()
+                engine.go(depth=settings.depth)
+                cur_score = info_handler.info["score"][1]
+                logging.debug(bcolors.OKGREEN + node.board().san(next_node.move) + bcolors.ENDC)
+                logging.debug(bcolors.OKBLUE + "   CP: " + str(cur_score.cp))
+                logging.debug("   Mate: " + str(cur_score.mate) + bcolors.ENDC)
+                if investigate(prev_score, cur_score, node.board()):
+                    logging.debug(bcolors.WARNING + "   Investigate!" + bcolors.ENDC)
+                    logging.debug(bcolors.WARNING + "Generating new puzzle..." + bcolors.ENDC)
+                    currentPuzzle = puzzle(node.board(), next_node.move, str(game_id), engine, info_handler, game, settings.strict)
+                    currentPuzzle.generate(settings.depth)
+                    if currentPuzzle.is_complete():
+                        puzzle_pgn = post_puzzle(currentPuzzle, settings.include_blunder)
+                        puzzle_json = currentPuzzle.to_json(settings.user, puzzle_pgn)
+                        insertPuzzle(puzzle_json)
+                prev_score = cur_score
+                node = next_node
+            updateGame(game_id)  
+except Exception as err:
+    print(err)
