@@ -5,10 +5,9 @@
 import argparse
 import io
 import logging
-import sys
 
+import chess.engine
 import chess.pgn
-import chess.uci
 
 import pymongo
 
@@ -55,11 +54,8 @@ configure_logging(settings.loglevel)
 
 stockfish_command = get_stockfish_command(settings.stockfish)
 logging.debug(f'Using {stockfish_command} to run Stockfish.')
-engine = chess.uci.popen_engine(stockfish_command)
-engine.setoption({'Threads': settings.threads, 'Hash': settings.memory})
-engine.uci()
-info_handler = chess.uci.InfoHandler()
-engine.info_handlers.append(info_handler)
+engine = chess.engine.SimpleEngine.popen_uci(stockfish_command)
+engine.configure({'Threads': settings.threads, 'Hash': settings.memory})
 
 def updateGame(gameID: str) -> bool:
    client = pymongo.MongoClient('url')
@@ -106,26 +102,25 @@ try:
             logging.debug(bcolors.WARNING + "Game ID: " + str(game_id) + bcolors.ENDC)
             logging.debug(bcolors.WARNING + "Game headers: " + str(game) + bcolors.ENDC)
 
-            prev_score = chess.uci.Score(None, None)
+            prev_score = chess.engine.Cp(0)
 
             logging.debug(bcolors.OKGREEN + "Game Length: " + str(game.end().board().fullmove_number))
             logging.debug("Analysing Game..." + bcolors.ENDC)
 
-            engine.ucinewgame()
-
             while not node.is_end():
                 next_node = node.variation(0)
-                engine.position(next_node.board())
 
-                engine.go(depth=settings.depth)
-                cur_score = info_handler.info["score"][1]
+                info = engine.analyse(next_node.board(), chess.engine.Limit(depth=settings.depth))
+
+                cur_score = info["score"].relative
                 logging.debug(bcolors.OKGREEN + node.board().san(next_node.move) + bcolors.ENDC)
                 logging.debug(bcolors.OKBLUE + "   CP: " + str(cur_score.cp))
                 logging.debug("   Mate: " + str(cur_score.mate) + bcolors.ENDC)
+
                 if investigate(prev_score, cur_score, node.board()):
                     logging.debug(bcolors.WARNING + "   Investigate!" + bcolors.ENDC)
                     logging.debug(bcolors.WARNING + "Generating new puzzle..." + bcolors.ENDC)
-                    currentPuzzle = puzzle(node.board(), next_node.move, str(game_id), engine, info_handler, game, settings.strict)
+                    currentPuzzle = puzzle(node.board(), next_node.move, str(game_id), engine, info, game, settings.strict)
                     currentPuzzle.generate(settings.depth)
                     if currentPuzzle.is_complete():
                         puzzle_pgn = post_puzzle(currentPuzzle, settings.include_blunder)
