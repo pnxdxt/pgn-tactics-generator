@@ -5,6 +5,7 @@
 import argparse
 import io
 import logging
+import os
 
 import chess.engine
 import chess.pgn
@@ -57,35 +58,74 @@ logging.debug(f'Using {stockfish_command} to run Stockfish.')
 engine = chess.engine.SimpleEngine.popen_uci(stockfish_command)
 engine.configure({'Threads': settings.threads, 'Hash': settings.memory})
 
+client = pymongo.MongoClient('url')
+database = client["chesspecker-db"]
+collection = database["users"]
+userObject = collection.find_one({"id": settings.user})
+
+def createSet() -> bool:
+    newSet = {
+        'user': userObject["_id"],
+        'puzzles': [],
+        'length': 0,
+        'bestTime': 0,
+    }
+    try:
+        collection = database["puzzlesets"]
+        set_id = collection.insert_one(newSet).inserted_id
+        return set_id
+    except Exception as err:
+        print(err)
+        return False
+
+def getSet() -> bool:
+    try:
+        collection = database["puzzlesets"]
+        numberOfSets = collection.count_documents({"user": userObject["_id"]})
+        if numberOfSets == 0:
+            set_id = createSet()
+        else:
+            for current_set in collection.find({"user": userObject["_id"]}):
+                if current_set["length"] < 30:
+                    set_id = current_set["_id"]
+                    break
+
+        return set_id
+    except Exception as err:
+        print(err)
+        return False
+
 def updateGame(gameID: str) -> bool:
-   client = pymongo.MongoClient('url')
-   try:
-      database = client["woodpecker-db"]
-      collection = database["games"]
-      setAsAnalyzed = { "$set" : { "analyzed": True }}
-      collection.update_one({"game_id": gameID}, setAsAnalyzed)
-      return True
-   except Exception as err:
-      print(err)
-      return False
+    try:
+        setAsAnalyzed = { "$set" : { "analyzed": True }}
+        collection = database["games"]
+        collection.update_one({"game_id": gameID}, setAsAnalyzed)
+        return True
+    except Exception as err:
+        print(err)
+        return False
 
 def insertPuzzle(puzzle) -> bool:
-   client = pymongo.MongoClient('url')
-   try:
-      database = client["woodpecker-db"]
-      collection = database["puzzles"]
-      collection.insert_one(puzzle)
-      return True
-   except Exception as err:
-      print(err)
-      return False
+    try:
+        collection = database["puzzles"]
+        puzzle_id = collection.insert_one(puzzle).inserted_id
+        set_id = getSet()
+        collection = database["puzzlesets"]
+        pushPuzzleToSet =  { "$push" : { "puzzles": puzzle_id }}
+        collection.update_one({"_id": set_id}, pushPuzzleToSet)
+        incrementSetLength = {'$inc': {"length": 1}}
+        collection.update_one({"_id": set_id}, incrementSetLength)
+        collection = database["puzzlesets"]
+        incrementPuzzleNumber = {'$inc': {"puzzlesInDb": 1}}
+        collection.update_one({"_id": userObject["_id"]}, incrementPuzzleNumber)
+        return True
+    except Exception as err:
+        print(err)
+        return False
 
-client = pymongo.MongoClient('url')
 try:
-    database = client["woodpecker-db"]
     collection = database["games"]
-    print(settings.user)
-    for currentGame in collection.find({"user": settings.user}).limit(settings.max):
+    for currentGame in collection.find({"user": userObject["_id"]}).limit(settings.max):
         if currentGame["analyzed"] == True:
             print(currentGame["game_id"])
             print("Already analyzed")
@@ -109,25 +149,28 @@ try:
 
             while not node.is_end():
                 next_node = node.variation(0)
-
                 info = engine.analyse(next_node.board(), chess.engine.Limit(depth=settings.depth))
-
                 cur_score = info["score"].relative
                 logging.debug(bcolors.OKGREEN + node.board().san(next_node.move) + bcolors.ENDC)
-                logging.debug(bcolors.OKBLUE + "   CP: " + str(cur_score.cp))
-                logging.debug("   Mate: " + str(cur_score.mate) + bcolors.ENDC)
+                logging.debug(bcolors.OKBLUE + "   CP: " + str(cur_score.score()) + bcolors.ENDC)
+                logging.debug(bcolors.OKBLUE + "   Mate: " + str(cur_score.mate()) + bcolors.ENDC)
 
                 if investigate(prev_score, cur_score, node.board()):
                     logging.debug(bcolors.WARNING + "   Investigate!" + bcolors.ENDC)
                     logging.debug(bcolors.WARNING + "Generating new puzzle..." + bcolors.ENDC)
                     currentPuzzle = puzzle(node.board(), next_node.move, str(game_id), engine, info, game, settings.strict)
                     currentPuzzle.generate(settings.depth)
+
                     if currentPuzzle.is_complete():
                         puzzle_pgn = post_puzzle(currentPuzzle, settings.include_blunder)
                         puzzle_json = currentPuzzle.to_json(settings.user, puzzle_pgn)
                         insertPuzzle(puzzle_json)
+
                 prev_score = cur_score
                 node = next_node
             updateGame(game_id)  
 except Exception as err:
     print(err)
+finally:
+    print("all done")
+    os._exit(1)
